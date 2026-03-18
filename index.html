@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8">
+    <title>Tenkasi Taluk Analysis</title>
+
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet"
+        href="https://cdnjs.cloudflare.com/ajax/libs/leaflet-search/3.0.9/leaflet-search.min.css" />
+
+    <style>
+        #map {
+            height: 100vh;
+        }
+    </style>
+</head>
+
+<body>
+
+<div id="map"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet-search/3.0.9/leaflet-search.min.js"></script>
+<script src="https://unpkg.com/@turf/turf@6/turf.min.js"></script>
+
+<script>
+
+var map = L.map('map').setView([8.95, 77.3], 10);
+
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+
+let talukLayer, waterLayer, buildingData;
+let bufferLayer = null;
+let buildingPointLayer = null;
+
+Promise.all([
+    fetch('tenkasi_taluks.geojson').then(res => res.json()),
+    fetch('water_bodies_tenkasi.geojson').then(res => res.json()),
+    fetch('buildings_tenkasi.geojson').then(res => res.json())
+]).then(([talukData, waterData, buildingGeo]) => {
+
+    buildingData = buildingGeo;
+
+    // 🔴 CONVERT BUILDINGS ONCE (IMPORTANT)
+    let buildingPoints = turf.featureCollection(
+        buildingData.features.map(f => turf.pointOnFeature(f))
+    );
+
+    // 🟡 SHOW BUILDINGS ON MAP (DEBUG)
+    buildingPointLayer = L.geoJSON(buildingPoints, {
+        pointToLayer: (f, latlng) =>
+            L.circleMarker(latlng, { radius: 3, color: "black" })
+    }).addTo(map);
+
+    console.log("Total Buildings:", buildingPoints.features.length);
+
+    talukLayer = L.geoJSON(talukData, {
+        style: {
+            color: "black",
+            fillColor: "lightgreen",
+            fillOpacity: 0.5
+        },
+
+        onEachFeature: function (feature, layer) {
+
+            let name = feature.properties.shapeName;
+
+            layer.bindPopup("Taluk: " + name);
+
+            layer.on('click', function () {
+
+                map.fitBounds(layer.getBounds());
+
+                if (waterLayer) map.removeLayer(waterLayer);
+                if (bufferLayer) map.removeLayer(bufferLayer);
+
+                let filteredWater = waterData.features.filter(w =>
+                    turf.booleanIntersects(w, feature)
+                );
+
+                waterLayer = L.geoJSON(filteredWater, {
+                    style: { color: "blue" },
+
+                    onEachFeature: function (wFeature, wLayer) {
+
+                        wLayer.bindPopup("Click to analyze");
+
+                        wLayer.on('click', function () {
+
+                            // REMOVE OLD BUFFER
+                            if (bufferLayer) map.removeLayer(bufferLayer);
+
+                            // 🔴 BIG BUFFER FOR DEBUG (1 KM)
+                            let buffer = turf.buffer(wFeature, 1, { units: 'kilometers' });
+
+                            bufferLayer = L.geoJSON(buffer, {
+                                style: { color: "red" }
+                            }).addTo(map);
+
+                            // 🟡 COUNT BUILDINGS (SAFE METHOD)
+                            let count = buildingPoints.features.filter(pt =>
+                                turf.booleanPointInPolygon(pt, buffer)
+                            ).length;
+
+                            console.log("Buildings inside:", count);
+
+                            // ✅ POPUP
+                            wLayer.unbindPopup();
+                            wLayer.bindPopup("Buildings in buffer: " + count).openPopup();
+
+                        });
+                    }
+
+                }).addTo(map);
+
+            });
+        }
+
+    }).addTo(map);
+
+    // 🔍 SEARCH
+    var searchControl = new L.Control.Search({
+        layer: talukLayer,
+        propertyName: 'shapeName',
+        marker: false,
+        position: 'topright',
+        collapsed: false,
+        textPlaceholder: 'Search Taluk...'
+    });
+
+    map.addControl(searchControl);
+
+    let selectedLayer = null;
+
+    searchControl.on('search:locationfound', function (e) {
+
+        if (selectedLayer) {
+            talukLayer.resetStyle(selectedLayer);
+        }
+
+        e.layer.setStyle({
+            fillColor: 'yellow'
+        });
+
+        selectedLayer = e.layer;
+
+        map.fitBounds(e.layer.getBounds());
+
+        if (e.layer._popup) {
+            e.layer.openPopup();
+        }
+    });
+
+});
+
+</script>
+
+</body>
+</html>
